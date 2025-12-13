@@ -4,106 +4,114 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
 import asyncio
-import math
 from typing import List, Generator, Any, Dict
 
-class City(BaseModel):
-    id: int
-    x: float
-    y: float
 
-class BFSRequest(BaseModel):
-    cities: List[City]
+class Point(BaseModel):
+    r: int
+    c: int
 
-def calculate_distance(city1: City, city2: City) -> float:
-    """Euclidean distance between two cities."""
-    dx = city1.x - city2.x
-    dy = city1.y - city2.y
-    return math.sqrt(dx * dx + dy * dy)
+class MazeRequest(BaseModel):
+    grid: List[List[int]]  # 0 = Empty, 1 = Wall
+    start: Point
+    end: Point
 
-def calculate_total_distance(route: List[int], cities: List[City]) -> float:
-    """Calculates total distance of a route (including return to start)."""
-    total = 0
-    for i in range(len(route) - 1):
-        total += calculate_distance(cities[route[i]], cities[route[i + 1]])
-    if len(route) > 0:
-        total += calculate_distance(cities[route[-1]], cities[route[0]])
-    return total
+def create_event(event_type: str, **kwargs) -> Dict[str, Any]:
+    payload = {"type": event_type}
+    payload.update(kwargs)
+    return payload
 
-def bfs_algorithm(cities: List[City]) -> Generator[Dict[str, Any], None, None]:
-    if len(cities) == 0:
-        return
 
-    queue = [[0]]
-    best_route = None
-    best_distance = float('inf')
-    explored_count = 0
-    max_explore = 2000 
+def bfs_maze_solver(grid: List[List[int]], start: Point, end: Point) -> Generator[Dict[str, Any], None, None]:
+    rows = len(grid)
+    cols = len(grid[0])
 
-    yield {
-        "type": "init",
-        "route": [0],
-        "message": "Start at City 0",
-        "level": 0
-    }
+    # Queue stores: [Path Array of (r, c) tuples]
+    # We store the full path to visualize the tree branches
+    start_tuple = (start.r, start.c)
+    queue = [[start_tuple]]
 
-    while queue and explored_count < max_explore:
+    # Global Visited set to prevent cycles and ensure shortest path
+    visited = {start_tuple}
+
+    # 4 Directions: Up, Right, Down, Left
+    directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]
+
+    # 1. Init
+    yield create_event(
+        "init",
+        route=[start_tuple],
+        message=f"Starting at ({start.r}, {start.c})",
+        level=0
+    )
+
+    found_solution = False
+
+    while queue:
         current_path = queue.pop(0)
-        explored_count += 1
-        
-        yield {
-            "type": "processing",
-            "route": current_path,
-            "message": f"Processing node {current_path[-1]} at level {len(current_path)-1}",
-            "bestDistance": best_distance,
-            "queueSize": len(queue)
-        }
+        current_node = current_path[-1]  # (r, c)
 
-        if len(current_path) == len(cities):
-            distance = calculate_total_distance(current_path, cities)
-            is_best = distance < best_distance
-            
-            if is_best:
-                best_distance = distance
-                best_route = current_path.copy()
-            
-            yield {
-                "type": "leaf",
-                "route": current_path,
-                "distance": distance,
-                "isBest": is_best,
-                "bestRoute": best_route,
-                "bestDistance": best_distance,
-                "message": f"Route complete: {distance:.1f}"
-            }
-            continue
-        
+        # 2. Processing
+        yield create_event(
+            "processing",
+            route=current_path,
+            currentNode=current_node,
+            message=f"Scanning neighbors of ({current_node[0]}, {current_node[1]})",
+            queueSize=len(queue)
+        )
+
+        # Check Win Condition
+        if current_node[0] == end.r and current_node[1] == end.c:
+            found_solution = True
+            yield create_event(
+                "leaf",
+                route=current_path,
+                isSolution=True,
+                solutionLength=len(current_path),
+                message=f"Target found! Length: {len(current_path)}"
+            )
+            break
+
+        # Expand Neighbors
         children_added = False
-        for i in range(len(cities)):
-            if i not in current_path:
-                new_path = current_path + [i]
-                queue.append(new_path)
-                children_added = True
-                
-                yield {
-                    "type": "expand",
-                    "parentPath": current_path,
-                    "route": new_path,
-                    "childCity": i,
-                    "level": len(new_path) - 1,
-                    "message": f"Discovered child {i}",
-                    "bestDistance": best_distance
-                }
-        
-        if children_added:
-            yield {"type": "BATCH_COMPLETE"}
+        for dr, dc in directions:
+            nr, nc = current_node[0] + dr, current_node[1] + dc
 
-    yield {
-        "type": "done",
-        "bestRoute": best_route,
-        "bestDistance": best_distance,
-        "message": "BFS Complete"
-    }
+            # Check Bounds, Walls, and Visited
+            if 0 <= nr < rows and 0 <= nc < cols:
+                if grid[nr][nc] == 0 and (nr, nc) not in visited:
+                    visited.add((nr, nc))
+
+                    new_path = current_path + [(nr, nc)]
+                    queue.append(new_path)
+                    children_added = True
+
+                    # 3. Expansion
+                    yield create_event(
+                        "expand",
+                        parentPath=current_path,
+                        route=new_path,
+                        childNode=(nr, nc),
+                        level=len(new_path) - 1,
+                        message=f"Discovered ({nr}, {nc})"
+                    )
+
+        if children_added:
+            yield create_event("BATCH_COMPLETE")
+
+    if found_solution:
+        yield create_event(
+            "done",
+            success=True,
+            message="Maze Solved"
+        )
+    else:
+        yield create_event(
+            "done",
+            success=False,
+            message="No path found to target!"
+        )
+
 
 app = FastAPI()
 
@@ -115,38 +123,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-async def api_stream_wrapper(cities: List[City]):
-    """
-    Wraps the pure BFS algorithm to add:
-    1. JSON Serialization
-    2. Delays (asyncio.sleep) for visualization purposes
-    3. Data sanitization (Infinity -> null)
-    """
-    
-    algorithm_iterator = bfs_algorithm(cities)
-    
+
+async def api_stream_wrapper(req: MazeRequest):
+    algorithm_iterator = bfs_maze_solver(req.grid, req.start, req.end)
+
     for step in algorithm_iterator:
         if step.get("type") == "BATCH_COMPLETE":
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
             continue
-            
-        # 1. Sanitize Data (JSON doesn't support Infinity)
-        if "bestDistance" in step and step["bestDistance"] == float('inf'):
-            step["bestDistance"] = None
 
-        # 2. Timing Control based on event type
         if step["type"] == "init":
             await asyncio.sleep(0.5)
         elif step["type"] == "processing":
-            await asyncio.sleep(0.1)
-        
-        # 3. Serialize and Yield
+            await asyncio.sleep(0.02)
+
         yield json.dumps(step) + "\n"
 
-@app.post("/api/bfs")
-async def run_bfs(request: BFSRequest):
+
+@app.post("/api/maze")
+async def run_maze(request: MazeRequest):
     return StreamingResponse(
-        api_stream_wrapper(request.cities), 
+        api_stream_wrapper(request),
         media_type="application/x-ndjson"
     )
 
