@@ -203,7 +203,7 @@ const MazeSimulator: React.FC = () => {
     abortControllerRef.current = new AbortController();
 
     try {
-      const response = await fetch("http://localhost:8000/api/maze", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/maze`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
