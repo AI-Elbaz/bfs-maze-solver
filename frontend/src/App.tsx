@@ -308,39 +308,27 @@ const MazeSimulator = () => {
       switch (event.type) {
         case "visit":
           // Show current exploration path
-          if (event.path && event.cell) {
-            setSimulation(prev => ({
-              ...prev,
-              activePath: event.path!,
-              visitedCells: new Set(prev.visitedCells).add(
-                pointToKey(event.cell!),
-              ),
-              message: `Exploring cell (${event.cell![0]}, ${event.cell![1]})`,
-            }));
-          }
-          break;
-
-        case "solution":
-          // Solution found - highlight the path
           if (event.path) {
+            const cell = event.path[event.path.length - 1];
             setSimulation(prev => ({
               ...prev,
-              solutionPath: event.path!,
-              activePath: [],
-              message: `Solution found! Path length: ${event.length || event.path!.length}`,
+              activePath: event.path,
+              visitedCells: new Set(prev.visitedCells).add(pointToKey(cell)),
+              message: `Exploring cell (${cell[0]}, ${cell[1]})`,
             }));
           }
           break;
 
         case "complete":
-          // Finish the algorithm
+          // Simulation ended
           if (!controller.signal.aborted) {
             setIsRunning(false);
             setSimulation(prev => ({
               ...prev,
               status: event.success ? "success" : "failure",
+              solutionPath: event.success ? prev.activePath : [],
               message: event.success
-                ? "Maze solved!"
+                ? `Maze solved! Path length: ${prev.activePath.length}`
                 : "No path exists to target",
             }));
           }
@@ -488,6 +476,12 @@ const MazeSimulator = () => {
               </div>
             </div>
           </div>
+          {/* message */}
+          {simulation.message && (
+            <div className="col-span-12 bg-blue-50 text-blue-700 p-4 rounded-lg border border-blue-200">
+              {simulation.message}
+            </div>
+          )}
         </div>
 
         <div className="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-6">

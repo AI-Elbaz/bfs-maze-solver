@@ -34,24 +34,11 @@ def bfs_maze_solver(
         current_path = queue.pop(0)
         current_node = current_path[-1]
         
-        yield {
-            "type": "visit",
-            "path": current_path,
-            "cell": current_node
-        }
+        yield {"type": "visit", "path": current_path}
         
         # Check if we reached the end
         if current_node[0] == end.r and current_node[1] == end.c:
-            yield {
-                "type": "solution",
-                "path": current_path,
-                "length": len(current_path)
-            }
-            
-            yield {
-                "type": "complete",
-                "success": True
-            }
+            yield {"type": "complete", "success": True}
             return
         
         # Expand neighbors
@@ -66,10 +53,7 @@ def bfs_maze_solver(
                 visited.add((nr, nc))
                 queue.append(current_path + [(nr, nc)])
     
-    yield {
-        "type": "complete",
-        "success": False
-    }
+    yield {"type": "complete", "success": False}
 
 
 app = FastAPI()
@@ -84,7 +68,7 @@ app.add_middleware(
 
 async def api_stream_wrapper(req: MazeRequest):
     for event in bfs_maze_solver(req.grid, req.start, req.end):
-        yield json.dumps(event) + "\n"
+        yield json.dumps(event, separators=(',', ':')) + "\n"
 
 
 @app.post("/api/maze")
