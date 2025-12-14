@@ -79,7 +79,6 @@ const MazeCell = React.memo(
       bgClass = "bg-blue-300";
     } else if (isVisited) {
       bgClass = "bg-blue-50";
-      animationClass = "duration-300 transition-colors";
     }
 
     return (
