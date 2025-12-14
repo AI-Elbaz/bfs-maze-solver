@@ -1,11 +1,10 @@
-import React, {useState, useEffect, useRef} from "react";
+import React, {useState, useEffect, useRef, useCallback} from "react";
 import {
   Play,
   RotateCcw,
   ShieldBan,
   Footprints,
   Grid3X3,
-  Info,
   Shuffle,
   Clock,
   Database,
@@ -14,46 +13,106 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Gauge,
+  Info,
 } from "lucide-react";
+
 import "./index.css";
+import type {
+  Point,
+  SimulationState,
+  SimulationStatus,
+  MazeEvent,
+} from "./types";
+import {COLS, ROWS, START_POS, END_POS} from "./constants";
+import {
+  isSamePoint,
+  pointToKey,
+  createEmptyGrid,
+  getInitialSimulationState,
+  createRandomGrid,
+} from "./utils";
 
-type Point = [number, number];
-
-interface MazeStep {
-  type: "init" | "processing" | "expand" | "leaf" | "done";
-  route?: Point[];
-  message: string;
-  parentPath?: Point[];
-  childNode?: Point;
-  isSolution?: boolean;
-  success?: boolean;
+interface MazeCellProps {
+  point: Point;
+  isWall: boolean;
+  isStart: boolean;
+  isEnd: boolean;
+  isSolution: boolean;
+  isActive: boolean;
+  isHead: boolean;
+  isVisited: boolean;
+  onClick: () => void;
+  disabled: boolean;
 }
 
-const ROWS = 15;
-const COLS = 20;
+const MazeCell = React.memo(
+  ({
+    isWall,
+    isStart,
+    isEnd,
+    isSolution,
+    isActive,
+    isHead,
+    isVisited,
+    onClick,
+    disabled,
+  }: MazeCellProps) => {
+    let bgClass = "bg-white";
+    let content = null;
+    let animationClass = "";
 
-const isSamePoint = (p1: Point, p2: Point) =>
-  p1[0] === p2[0] && p1[1] === p2[1];
+    if (isWall) {
+      bgClass = "bg-slate-800 shadow-inner";
+    } else if (isStart) {
+      bgClass = "bg-blue-600 shadow-md transform z-10";
+      content = <div className="text-xs font-bold text-white">S</div>;
+    } else if (isEnd) {
+      bgClass = "bg-red-500 shadow-md transform z-10";
+      content = <div className="text-xs font-bold text-white">E</div>;
+    } else if (isSolution) {
+      bgClass = "bg-emerald-400";
+      animationClass = "animate-pulse";
+    } else if (isHead) {
+      bgClass = "bg-blue-500 ring-4 ring-blue-200 z-10";
+    } else if (isActive) {
+      bgClass = "bg-blue-300";
+    } else if (isVisited) {
+      bgClass = "bg-blue-50";
+      animationClass = "duration-300 transition-colors";
+    }
 
-const MazeView: React.FC<{
+    return (
+      <div
+        onClick={disabled ? undefined : onClick}
+        className={`
+        relative rounded flex items-center justify-center select-none aspect-square
+        ${bgClass} ${animationClass}
+        ${!disabled ? "cursor-pointer hover:bg-slate-200" : ""}
+      `}>
+        {content}
+        {isSolution && !isStart && !isEnd && (
+          <div className="w-2 h-2 bg-white rounded-full opacity-80" />
+        )}
+      </div>
+    );
+  },
+);
+
+interface MazeViewProps {
   grid: number[][];
-  start: Point;
-  end: Point;
-  activePath: Point[];
-  solutionPath: Point[];
-  visitedCells: Set<string>;
+  simulation: SimulationState;
   onCellClick: (r: number, c: number) => void;
   isRunning: boolean;
-}> = ({
+}
+
+const MazeView = ({
   grid,
-  start,
-  end,
-  activePath,
-  solutionPath,
-  visitedCells,
+  simulation,
   onCellClick,
   isRunning,
-}) => {
+}: MazeViewProps) => {
+  const {activePath, solutionPath, visitedCells} = simulation;
   const head = activePath.length > 0 ? activePath[activePath.length - 1] : null;
 
   return (
@@ -68,58 +127,23 @@ const MazeView: React.FC<{
         {grid.map((row, r) =>
           row.map((cellVal, c) => {
             const p: Point = [r, c];
-            const isStart = isSamePoint(p, start);
-            const isEnd = isSamePoint(p, end);
-            const isWall = cellVal === 1;
-
-            // State checks
-            const isSolution = solutionPath.some(sp => isSamePoint(sp, p));
-            const isActive = activePath.some(ap => isSamePoint(ap, p));
-            const isHead = head && isSamePoint(head, p);
-            const isVisited = visitedCells.has(`${r},${c}`);
-
-            // Styling Logic
-            let bgClass = "bg-white"; // Default Empty
-            let content = null;
-            let animationClass = "";
-
-            if (isWall) {
-              bgClass = "bg-slate-800 shadow-inner";
-            } else if (isStart) {
-              bgClass = "bg-blue-600 shadow-md transform scale-105 z-10";
-              content = <div className="text-xs font-bold text-white">S</div>;
-            } else if (isEnd) {
-              bgClass = "bg-red-500 shadow-md transform scale-105 z-10";
-              content = <div className="text-xs font-bold text-white">E</div>;
-            } else if (isSolution) {
-              bgClass = "bg-emerald-400";
-              animationClass = "animate-pulse";
-            } else if (isHead) {
-              bgClass = "bg-amber-500 ring-4 ring-amber-200 z-10";
-            } else if (isActive) {
-              bgClass = "bg-amber-300"; // Path currently being traced in memory
-            } else if (isVisited) {
-              bgClass = "bg-blue-100"; // Previously visited (Closed Set)
-              animationClass = "duration-500 transition-colors";
-            }
+            const isStart = isSamePoint(p, START_POS);
+            const isEnd = isSamePoint(p, END_POS);
 
             return (
-              <div
-                key={`${r}-${c}`}
-                onClick={() =>
-                  !isRunning && !isStart && !isEnd && onCellClick(r, c)
-                }
-                className={`
-                  relative rounded flex items-center justify-center cursor-pointer select-none
-                  ${bgClass} ${animationClass}
-                  ${!isRunning && !isStart && !isEnd ? "hover:bg-slate-200" : ""}
-                `}>
-                {content}
-                {/* Small indicator dots for the solution path */}
-                {isSolution && !isStart && !isEnd && (
-                  <div className="w-2 h-2 bg-white rounded-full opacity-80"></div>
-                )}
-              </div>
+              <MazeCell
+                key={pointToKey(p)}
+                point={p}
+                isWall={cellVal === 1}
+                isStart={isStart}
+                isEnd={isEnd}
+                isSolution={solutionPath.some(sp => isSamePoint(sp, p))}
+                isActive={activePath.some(ap => isSamePoint(ap, p))}
+                isHead={head ? isSamePoint(head, p) : false}
+                isVisited={visitedCells.has(pointToKey(p))}
+                onClick={() => onCellClick(r, c)}
+                disabled={isRunning || isStart || isEnd}
+              />
             );
           }),
         )}
@@ -128,79 +152,215 @@ const MazeView: React.FC<{
   );
 };
 
-const startPos: Point = [1, 1];
-const endPos: Point = [ROWS - 2, COLS - 2];
+const StatusBadge = ({status}: {status: SimulationStatus}) => {
+  const badges = {
+    idle: (
+      <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-bold">
+        READY
+      </span>
+    ),
+    running: (
+      <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-bold animate-pulse">
+        SEARCHING...
+      </span>
+    ),
+    success: (
+      <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+        <CheckCircle2 size={12} /> SOLVED
+      </span>
+    ),
+    failure: (
+      <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+        <XCircle size={12} /> NO PATH
+      </span>
+    ),
+  };
 
-const MazeSimulator: React.FC = () => {
-  const [grid, setGrid] = useState<number[][]>([]);
+  return badges[status];
+};
 
-  const [activePath, setActivePath] = useState<Point[]>([]);
-  const [solutionPath, setSolutionPath] = useState<Point[]>([]);
-  const [visitedCells, setVisitedCells] = useState<Set<string>>(new Set());
+interface ControlPanelProps {
+  isRunning: boolean;
+  animationSpeed: number;
+  onSpeedChange: (speed: number) => void;
+  onClearWalls: () => void;
+  onRandomize: () => void;
+  onRunBFS: () => void;
+  onReset: () => void;
+}
 
+const ControlPanel = ({
+  isRunning,
+  animationSpeed,
+  onSpeedChange,
+  onClearWalls,
+  onRandomize,
+  onRunBFS,
+  onReset,
+}: ControlPanelProps) => (
+  <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">
+      Controls
+    </h3>
+
+    <div className="grid grid-cols-2 gap-3 mb-4">
+      <button
+        onClick={onClearWalls}
+        disabled={isRunning}
+        className="flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors disabled:opacity-50">
+        <Eraser size={16} /> Clear Walls
+      </button>
+      <button
+        onClick={onRandomize}
+        disabled={isRunning}
+        className="flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors disabled:opacity-50">
+        <Shuffle size={16} /> Randomize
+      </button>
+    </div>
+
+    <div className="mb-6 bg-slate-50 p-3 rounded-lg border border-slate-200">
+      <div className="flex justify-between items-center mb-2">
+        <label className="text-xs font-bold text-slate-600 flex items-center gap-1">
+          <Gauge size={14} /> Animation Speed
+        </label>
+        <span className="text-xs text-slate-500 font-mono">
+          {animationSpeed}ms
+        </span>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="200"
+        step="10"
+        value={animationSpeed}
+        onChange={e => onSpeedChange(Number(e.target.value))}
+        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+      />
+      <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+        <span>Fast</span>
+        <span>Slow</span>
+      </div>
+    </div>
+
+    <div className="flex gap-3">
+      <button
+        onClick={onRunBFS}
+        disabled={isRunning}
+        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 disabled:bg-slate-300 shadow-sm transition-all active:scale-95">
+        <Play size={18} /> Run BFS
+      </button>
+      <button
+        onClick={onReset}
+        className="flex items-center justify-center gap-2 px-4 py-3 border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-700 transition-colors">
+        <RotateCcw size={18} />
+      </button>
+    </div>
+  </div>
+);
+
+const MazeSimulator = () => {
+  const [grid, setGrid] = useState<number[][]>(createEmptyGrid());
+  const [simulation, setSimulation] = useState<SimulationState>(
+    getInitialSimulationState(),
+  );
   const [isRunning, setIsRunning] = useState(false);
-  const [status, setStatus] = useState<
-    "idle" | "running" | "success" | "failure"
-  >("idle");
-  const [message, setMessage] = useState("Ready to start");
-  const [error, setError] = useState("");
+  const [animationSpeed, setAnimationSpeed] = useState(50);
 
+  const speedRef = useRef(animationSpeed);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    resetMaze(false);
+    speedRef.current = animationSpeed;
+  }, [animationSpeed]);
+
+  const resetSimulation = useCallback((clearWalls: boolean) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    setIsRunning(false);
+    setSimulation(getInitialSimulationState());
+
+    if (clearWalls) {
+      setGrid(createEmptyGrid());
+    }
   }, []);
 
-  const resetMaze = (clearWalls: boolean) => {
-    if (abortControllerRef.current) abortControllerRef.current.abort();
-    setIsRunning(false);
-    setStatus("idle");
-    setActivePath([]);
-    setSolutionPath([]);
-    setVisitedCells(new Set());
-    setMessage("Ready to start");
-    setError("");
+  const handleRandomize = useCallback(() => {
+    resetSimulation(false);
+    setGrid(createRandomGrid());
+  }, [resetSimulation]);
 
-    if (clearWalls || grid.length === 0) {
-      const newGrid = Array(ROWS)
-        .fill(0)
-        .map(() => Array(COLS).fill(0));
-      setGrid(newGrid);
-    }
-  };
-
-  const generateRandomMaze = () => {
-    resetMaze(true);
-    // 30% chance of wall
-    const newGrid = Array(ROWS)
-      .fill(0)
-      .map(() =>
-        Array(COLS)
-          .fill(0)
-          .map(() => (Math.random() < 0.3 ? 1 : 0)),
+  const toggleWall = useCallback((r: number, c: number) => {
+    setGrid(prev => {
+      const newGrid = prev.map((row, rowIdx) =>
+        rowIdx === r ? [...row] : row,
       );
-    // Ensure Start/End are open
-    newGrid[startPos[0]][startPos[1]] = 0;
-    newGrid[endPos[0]][endPos[1]] = 0;
-    setGrid(newGrid);
-  };
+      newGrid[r][c] = newGrid[r][c] === 0 ? 1 : 0;
+      return newGrid;
+    });
+  }, []);
 
-  const toggleWall = (r: number, c: number) => {
-    const newGrid = [...grid];
-    newGrid[r] = [...newGrid[r]]; // copy row
-    newGrid[r][c] = newGrid[r][c] === 0 ? 1 : 0;
-    setGrid(newGrid);
-  };
+  const processStreamData = useCallback(
+    (event: MazeEvent, controller: AbortController) => {
+      if (controller.signal.aborted) return;
 
-  const runBFS = async () => {
+      switch (event.type) {
+        case "visit":
+          // Show current exploration path
+          if (event.path && event.cell) {
+            setSimulation(prev => ({
+              ...prev,
+              activePath: event.path!,
+              visitedCells: new Set(prev.visitedCells).add(
+                pointToKey(event.cell!),
+              ),
+              message: `Exploring cell (${event.cell![0]}, ${event.cell![1]})`,
+            }));
+          }
+          break;
+
+        case "solution":
+          // Solution found - highlight the path
+          if (event.path) {
+            setSimulation(prev => ({
+              ...prev,
+              solutionPath: event.path!,
+              activePath: [],
+              message: `Solution found! Path length: ${event.length || event.path!.length}`,
+            }));
+          }
+          break;
+
+        case "complete":
+          // Finish the algorithm
+          if (!controller.signal.aborted) {
+            setIsRunning(false);
+            setSimulation(prev => ({
+              ...prev,
+              status: event.success ? "success" : "failure",
+              message: event.success
+                ? "Maze solved!"
+                : "No path exists to target",
+            }));
+          }
+          break;
+      }
+    },
+    [],
+  );
+
+  const runBFS = useCallback(async () => {
+    if (isRunning) return;
+
     setIsRunning(true);
-    setStatus("running");
-    setSolutionPath([]);
-    setActivePath([]);
-    setVisitedCells(new Set());
-    setError("");
+    setSimulation({
+      ...getInitialSimulationState(),
+      status: "running",
+    });
 
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/maze`, {
@@ -208,58 +368,53 @@ const MazeSimulator: React.FC = () => {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           grid,
-          start: {r: startPos[0], c: startPos[1]},
-          end: {r: endPos[0], c: endPos[1]},
+          start: {r: START_POS[0], c: START_POS[1]},
+          end: {r: END_POS[0], c: END_POS[1]},
         }),
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error("Backend Error");
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
 
       while (true) {
         const {done, value} = await reader!.read();
-        if (done) break;
+        if (controller.signal.aborted || done) break;
+
         buffer += decoder.decode(value, {stream: true});
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (!line.trim()) continue;
-          const data: MazeStep = JSON.parse(line);
+          if (!line.trim() || controller.signal.aborted) continue;
 
-          if (data.type === "processing" && data.route) {
-            setActivePath(data.route);
-            setMessage(data.message);
-          } else if (data.type === "expand" && data.childNode) {
-            setVisitedCells(prev => {
-              const next = new Set(prev);
-              next.add(`${data.childNode![0]},${data.childNode![1]}`);
-              return next;
-            });
-          } else if (data.type === "leaf" && data.isSolution && data.route) {
-            setSolutionPath(data.route);
-            setActivePath([]); // Clear active exploration line to show solution clearly
-            setMessage(data.message);
-          } else if (data.type === "done") {
-            setIsRunning(false);
-            setStatus(data.success ? "success" : "failure");
+          const event: MazeEvent = JSON.parse(line);
+          processStreamData(event, controller);
+
+          // Add delay between events (except for 'complete')
+          if (event.type !== "complete" && speedRef.current > 0) {
+            await new Promise(resolve => setTimeout(resolve, speedRef.current));
+            if (controller.signal.aborted) break;
           }
         }
       }
     } catch (err) {
-      if (err instanceof Error && err.name !== "AbortError")
-        setError("Connection to Python backend failed.");
-      setIsRunning(false);
+      if (err instanceof Error && err.name !== "AbortError") {
+        setSimulation(prev => ({
+          ...prev,
+          error: "Connection to Python backend failed.",
+        }));
+        setIsRunning(false);
+      }
     }
-  };
+  }, [isRunning, grid, processStreamData]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto grid grid-cols-12 gap-6">
-        {/* HEADER */}
         <div className="col-span-12">
           <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-2">
             <Footprints className="text-blue-600" size={32} />
@@ -271,7 +426,6 @@ const MazeSimulator: React.FC = () => {
           </p>
         </div>
 
-        {/* LEFT COLUMN: MAZE (HERO) */}
         <div className="col-span-12 lg:col-span-8 flex flex-col gap-4">
           <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-slate-200">
             <div className="flex items-center gap-2 font-semibold text-slate-700">
@@ -280,128 +434,62 @@ const MazeSimulator: React.FC = () => {
                 (Click cells to toggle walls)
               </span>
             </div>
-
-            {/* Status Badge */}
-            <div>
-              {status === "idle" && (
-                <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-bold">
-                  READY
-                </span>
-              )}
-              {status === "running" && (
-                <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-bold animate-pulse">
-                  SEARCHING...
-                </span>
-              )}
-              {status === "success" && (
-                <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
-                  <CheckCircle2 size={12} /> SOLVED
-                </span>
-              )}
-              {status === "failure" && (
-                <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
-                  <XCircle size={12} /> NO PATH
-                </span>
-              )}
-            </div>
+            <StatusBadge status={simulation.status} />
           </div>
 
           <MazeView
             grid={grid}
-            start={startPos}
-            end={endPos}
-            activePath={activePath}
-            solutionPath={solutionPath}
-            visitedCells={visitedCells}
+            simulation={simulation}
             onCellClick={toggleWall}
             isRunning={isRunning}
           />
 
-          {error && (
+          {simulation.error && (
             <div className="bg-red-50 text-red-700 p-4 rounded-lg border border-red-200 flex items-center gap-2">
-              <AlertCircle size={20} /> {error}
+              <AlertCircle size={20} /> {simulation.error}
             </div>
           )}
         </div>
 
-        {/* RIGHT COLUMN: CONTROLS & INFO */}
         <div className="col-span-12 lg:col-span-4 flex flex-col gap-6">
-          {/* CONTROLS */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">
-              Controls
+          <ControlPanel
+            isRunning={isRunning}
+            animationSpeed={animationSpeed}
+            onSpeedChange={setAnimationSpeed}
+            onClearWalls={() => resetSimulation(true)}
+            onRandomize={handleRandomize}
+            onRunBFS={runBFS}
+            onReset={() => resetSimulation(false)}
+          />
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex-1 space-y-4">
+            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <Info size={14} /> Legend
             </h3>
-
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <button
-                onClick={() => resetMaze(true)}
-                disabled={isRunning}
-                className="flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors">
-                <Eraser size={16} /> Clear Walls
-              </button>
-              <button
-                onClick={generateRandomMaze}
-                disabled={isRunning}
-                className="flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors">
-                <Shuffle size={16} /> Randomize
-              </button>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={runBFS}
-                disabled={isRunning}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 disabled:bg-slate-300 shadow-sm transition-all active:scale-95">
-                <Play size={18} /> Run BFS
-              </button>
-              <button
-                onClick={() => resetMaze(false)}
-                className="flex items-center justify-center gap-2 px-4 py-3 border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-700 transition-colors">
-                <RotateCcw size={18} />
-              </button>
-            </div>
-          </div>
-
-          {/* STATUS LOG */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex-1 min-h-[200px]">
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Live Log
-            </h3>
-            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 h-[120px] overflow-y-auto font-mono text-xs leading-5 text-slate-600">
-              <span className="text-blue-600 font-bold">{">"}</span> {message}
-            </div>
-
-            <div className="mt-6 space-y-4">
-              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                <Info size={14} /> Legend
-              </h3>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-blue-600 rounded"></div> Start
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-red-500 rounded"></div> End
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-slate-800 rounded"></div> Wall
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-blue-100 rounded"></div> Visited
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-amber-500 rounded ring-2 ring-amber-300"></div>{" "}
-                  Scanning
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-emerald-400 rounded"></div>{" "}
-                  Shortest Path
-                </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-blue-600 rounded"></div> Start
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-red-500 rounded"></div> End
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-slate-800 rounded"></div> Wall
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-blue-100 rounded"></div> Visited
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-blue-500 rounded ring-2 ring-blue-300"></div>{" "}
+                Scanning
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-emerald-400 rounded"></div> Shortest
+                Path
               </div>
             </div>
           </div>
         </div>
 
-        {/* BOTTOM: ANALYSIS */}
         <div className="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <div className="border-b border-slate-100 pb-4 mb-4">
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -423,8 +511,8 @@ const MazeSimulator: React.FC = () => {
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
                 It visits every vertex (cell) and edge at most once. In a grid,
-                this is roughly proportional to the number of cells ($Rows
-                \times Cols$).
+                this is roughly proportional to the number of cells (Rows ×
+                Cols).
               </p>
             </div>
 
